@@ -18,12 +18,11 @@ class LLMTrainer:
             weight_decay=config.weight_decay
         )
         
+        # We removed pin_memory and num_workers to prevent silent hangs in Kaggle
         self.dataloader = DataLoader(
             self.dataset, 
             batch_size=config.batch_size, 
-            shuffle=True, 
-            pin_memory=True if torch.cuda.is_available() else False,
-            num_workers=2 if torch.cuda.is_available() else 0
+            shuffle=True
         )
 
     def train(self):
@@ -31,7 +30,6 @@ class LLMTrainer:
         os.makedirs(self.config.output_dir, exist_ok=True)
         step = 0
         
-        # Fixed the typo here
         autocast_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
         print(f"Starting training loop execution using precision: {autocast_dtype}")
         
@@ -42,10 +40,16 @@ class LLMTrainer:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
                 
+                if step == 0:
+                    print(f"Batch loaded. x shape: {x.shape}. Running forward pass (this might take 10-20 seconds)...")
+                
                 with torch.amp.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=autocast_dtype):
                     logits, loss = self.model(x, y)
                     loss = loss / self.config.gradient_accumulation_steps
                 
+                if step == 0:
+                    print("Forward pass done! Running backward pass...")
+                    
                 loss.backward()
                 
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
