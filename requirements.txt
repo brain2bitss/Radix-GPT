@@ -2,3 +2,5 @@ torch>=2.2.0
 numpy>=1.24.0
 pyyaml>=6.0
 transformers>=4.38.0
+datasets
+huggingface_hub

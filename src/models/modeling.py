@@ -29,12 +29,16 @@ class CustomLLM(nn.Module):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.token_embeddings.weight = self.lm_head.weight
+        if getattr(config, "tie_word_embeddings", True):
+            self.token_embeddings.weight = self.lm_head.weight
         self.apply(self._init_weights)
         print(f"Model Parameter Count: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}")
 
     def gradient_checkpointing_enable(self):
         self.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        self.gradient_checkpointing = False
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):

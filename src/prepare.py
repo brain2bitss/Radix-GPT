@@ -1,119 +1,184 @@
+"""Stream several datasets, mix them by token ratio, tokenize with the GPT-2 tokenizer and
+write uint16 shards. Memory stays small (one shard at a time) and the job is resumable.
+
+Run on a CPU-only Kaggle session (it does not use GPU quota):
+    python -m src.prepare --target_tokens 3e9 --hf_repo yourname/my-tokens
+
+With --hf_repo, every shard (and state.json) is uploaded to a private HF dataset repo as it
+is finished, so a dead session loses at most one shard and can be restarted with the same command.
+"""
+import argparse
+import collections
+import json
 import os
+import time
+
 import numpy as np
-from datasets import load_dataset
-from transformers import AutoTokenizer
 
-def clean_and_format_data(tokenizer, max_tokens=50_000_000):
-    print("Initializing Multi-Dataset Blending Pipeline...")
-    
-    # Target allocations: 30% General, 50% Chat (Formatted), 20% Code (Formatted)
-    wiki_target = int(max_tokens * 0.30)
-    oasst_target = int(max_tokens * 0.50)
-    code_target = int(max_tokens * 0.20)
-    
-    global_token_stream = []
+EOT = 50256  # GPT-2 <|endoftext|>, appended after every document
 
-    # =========================================================================
-    # DATASET 1: Wikipedia (General Knowledge)
-    # =========================================================================
-    print(f"\nProcessing Wikipedia Stream (Target: {wiki_target:,} tokens)...")
-    try:
-        wiki_ds = load_dataset("wikipedia", "20220301.en", split="train", streaming=True)
-        wiki_tokens = 0
-        for row in wiki_ds:
-            # Prompting format to teach it how to summarize text
-            formatted_text = f"<|System|>\nYou are a helpful assistant.\n<|User|>\nSummarize the following text:\n{row['text'][:1500]}\n<|Assistant|>\nHere is a summary:\n{row['text'][:400]}\n<|endoftext|>\n"
-            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
-            global_token_stream.extend(tokens)
-            wiki_tokens += len(tokens)
-            if wiki_tokens >= wiki_target:
+# ratio = share of total tokens. Dataset ids / config names / text fields: verify they still
+# exist on the Hub if a source fails to load.
+SOURCES = {
+    "fineweb_edu": dict(ratio=0.55, path="HuggingFaceFW/fineweb-edu", name="sample-10BT", field="text"),
+    "cosmopedia":  dict(ratio=0.15, path="HuggingFaceTB/smollm-corpus", name="cosmopedia-v2", field="text"),
+    "code":        dict(ratio=0.10, path="codeparrot/codeparrot-clean", name=None, field="content"),
+    "math":        dict(ratio=0.08, path="HuggingFaceTB/finemath", name="finemath-4plus", field="text"),
+    "wikipedia":   dict(ratio=0.07, path="wikimedia/wikipedia", name="20231101.en", field="text"),
+    "fineweb":     dict(ratio=0.05, path="HuggingFaceFW/fineweb", name="sample-10BT", field="text"),
+}
+
+
+class Source:
+    def __init__(self, name, spec, tok, skip_docs=0, batch_docs=256):
+        from datasets import load_dataset
+        kwargs = dict(split="train", streaming=True)
+        ds = (load_dataset(spec["path"], spec["name"], **kwargs) if spec["name"]
+              else load_dataset(spec["path"], **kwargs))
+        if skip_docs:
+            print(f"[{name}] skipping {skip_docs:,} docs already consumed in earlier runs...")
+            ds = ds.skip(skip_docs)
+        self.name, self.field, self.tok = name, spec["field"], tok
+        self.it = iter(ds)
+        self.batch_docs = batch_docs
+        self.buf = collections.deque()
+        self.docs = skip_docs  # docs popped so far (including earlier runs)
+
+    def _refill(self):
+        texts = []
+        for _ in range(self.batch_docs):
+            try:
+                row = next(self.it)
+            except StopIteration:
                 break
-        print(f"-> Successfully extracted {wiki_tokens:,} Wikipedia tokens.")
-    except Exception as e:
-        print(f"Skipping Wikipedia: {e}")
+            texts.append(row[self.field] or "")
+        if not texts:
+            return
+        enc = self.tok(texts, add_special_tokens=False, return_attention_mask=False)["input_ids"]
+        for ids in enc:
+            # None = too short to keep (still counts as a consumed doc for resume bookkeeping)
+            self.buf.append(None if len(ids) < 32 else np.array(ids + [EOT], dtype=np.uint16))
 
-    # =========================================================================
-    # DATASET 2: OpenAssistant (Formatting & Conversation)
-    # =========================================================================
-    print(f"\nProcessing OpenAssistant Stream (Target: {oasst_target:,} tokens)...")
-    try:
-        oasst_ds = load_dataset("OpenAssistant/oasst1", split="train")
-        en_oasst = oasst_ds.filter(lambda x: x["lang"] == "en")
-        
-        # We need to group by conversation ID to ensure the assistant replies to the right user
-        message_tree = {}
-        for row in en_oasst:
-            message_tree.setdefault(row['message_id'], row)
-            
-        oasst_tokens = 0
-        for row in en_oasst:
-            role = "User" if row['role'] == 'prompter' else "Assistant"
-            
-            # Add a system prompt to teach formatting
-            if role == "User":
-                # Every time we see a user prompt, we start a new conversation block
-                system_prompt = "<|System|>\nYou are a helpful AI assistant. When asked to list things, use bullet points. When asked for code, use markdown code blocks. Use paragraphs for explanations.\n"
-                formatted_text = f"{system_prompt}<|User|>\n{row['text']}\n"
-            else:
-                formatted_text = f"<|Assistant|>\n{row['text']}\n<|endoftext|>\n"
-                
-            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
-            global_token_stream.extend(tokens)
-            oasst_tokens += len(tokens)
-            
-            if oasst_tokens >= oasst_target:
-                break
-        print(f"-> Successfully extracted {oasst_tokens:,} OpenAssistant tokens.")
-    except Exception as e:
-        print(f"Skipping OpenAssistant: {e}")
+    def next(self):
+        if not self.buf:
+            self._refill()
+            if not self.buf:
+                raise EOFError(self.name)
+        self.docs += 1
+        return self.buf.popleft()
 
-    # =========================================================================
-    # DATASET 3: Code Feedback (Coding & Syntax)
-    # =========================================================================
-    print(f"\nProcessing Code Feedback Stream (Target: {code_target:,} tokens)...")
-    try:
-        code_ds = load_dataset("m-a-p/CodeFeedback-Filtered-Instruction", split="train", streaming=True)
-        code_tokens = 0
-        for row in code_ds:
-            # Format code specifically with markdown blocks
-            formatted_text = f"<|System|>\nYou are a helpful AI assistant. Provide code in ```python blocks.\n<|User|>\n{row['query']}\n<|Assistant|>\n```python\n{row['answer']}\n```\n<|endoftext|>\n"
-            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
-            global_token_stream.extend(tokens)
-            code_tokens += len(tokens)
-            if code_tokens >= code_target:
-                break
-        print(f"-> Successfully extracted {code_tokens:,} Coding tokens.")
-    except Exception as e:
-        print(f"Skipping Code Feedback: {e}")
 
-    return global_token_stream
+def save_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
 
 def main():
-    output_path = "data/tokenized/train.bin"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    
-    # We are generating 50 MILLION tokens. This will take ~15-20 minutes.
-    token_stream = clean_and_format_data(tokenizer, max_tokens=50_000_000)
-    
-    print(f"\nTotal Compiled Global Token Count: {len(token_stream):,}")
-    
-    # Shuffling
-    print("Performing global macro-shuffling across data segments...")
-    block_size = 2048
-    num_blocks = len(token_stream) // block_size
-    
-    if num_blocks > 0:
-        blocks = [token_stream[i*block_size : (i+1)*block_size] for i in range(num_blocks)]
-        np.random.seed(42)
-        np.random.shuffle(blocks)
-        token_stream = [token for block in blocks for token in block]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out_dir", default="data")
+    ap.add_argument("--target_tokens", type=float, default=3e9, help="training tokens (excludes val)")
+    ap.add_argument("--val_tokens", type=float, default=10e6)
+    ap.add_argument("--shard_tokens", type=float, default=100e6)
+    ap.add_argument("--hf_repo", default="", help="private HF *dataset* repo for shards + state")
+    args = ap.parse_args()
+    target, val_target, shard_target = int(args.target_tokens), int(args.val_tokens), int(args.shard_tokens)
 
-    print(f"Serializing unified binary array matrix directly to: {output_path}")
-    np_array = np.array(token_stream, dtype=np.uint16)
-    np_array.tofile(output_path)
-    print("Data compilation successfully completed. Ready for train.py execution loop!")
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.model_max_length = 10 ** 9  # silence the 1024-token warning; we pack, not truncate
+
+    shard_dir = os.path.join(args.out_dir, "shards")
+    os.makedirs(shard_dir, exist_ok=True)
+    state_path = os.path.join(args.out_dir, "state.json")
+
+    api = None
+    if args.hf_repo:
+        from huggingface_hub import HfApi, hf_hub_download
+        from src.utils import setup_hf_token
+        setup_hf_token()
+        api = HfApi()
+        api.create_repo(args.hf_repo, repo_type="dataset", private=True, exist_ok=True)
+        if not os.path.exists(state_path):
+            try:
+                hf_hub_download(args.hf_repo, "state.json", repo_type="dataset", local_dir=args.out_dir)
+                print("Restored state.json from the Hub; resuming.")
+            except Exception:
+                pass
+
+    if os.path.exists(state_path):
+        with open(state_path) as f:
+            state = json.load(f)
+    else:
+        state = {"shard_idx": 0, "val_done": False, "train_tokens": 0, "docs": {}, "emitted": {}}
+
+    sources = {n: Source(n, spec, tok, state["docs"].get(n, 0)) for n, spec in SOURCES.items()}
+    emitted = {n: state["emitted"].get(n, 0) for n in SOURCES}
+
+    def upload(path):
+        if api is None:
+            return
+        rel = os.path.relpath(path, args.out_dir).replace(os.sep, "/")
+        api.upload_file(path_or_fileobj=path, path_in_repo=rel, repo_id=args.hf_repo, repo_type="dataset")
+
+    def commit_state():
+        state["docs"] = {**state["docs"], **{n: s.docs for n, s in sources.items()}}
+        state["emitted"] = dict(emitted)
+        save_json(state_path, state)
+        upload(state_path)
+
+    def build_chunk(limit):
+        """Collect docs until >= limit tokens, always taking from the source furthest below
+        its target ratio, so the mix stays exact."""
+        parts, n, next_report = [], 0, 25_000_000
+        while n < limit and sources:
+            name = min(sources, key=lambda k: emitted[k] / SOURCES[k]["ratio"])
+            try:
+                arr = sources[name].next()
+            except EOFError:
+                print(f"[{name}] exhausted; its share will be redistributed.")
+                del sources[name]
+                continue
+            if arr is None:
+                continue
+            parts.append(arr)
+            n += len(arr)
+            emitted[name] += len(arr)
+            if n >= next_report:
+                print(f"   ...{n / 1e6:.0f}M / {limit / 1e6:.0f}M tokens in this chunk")
+                next_report += 25_000_000
+        return np.concatenate(parts) if parts else None
+
+    # ---- validation set (held out: taken from the stream first, never reused in training) ----
+    if not state["val_done"]:
+        print(f"Building validation set (~{val_target / 1e6:.0f}M tokens)...")
+        chunk = build_chunk(val_target)
+        path = os.path.join(args.out_dir, "val.bin")
+        chunk.tofile(path)
+        upload(path)
+        state["val_done"] = True
+        commit_state()
+
+    # ---- training shards ----
+    while state["train_tokens"] < target:
+        t0 = time.time()
+        chunk = build_chunk(shard_target)
+        if chunk is None:
+            print("All sources exhausted.")
+            break
+        path = os.path.join(shard_dir, f"shard_{state['shard_idx']:05d}.bin")
+        chunk.tofile(path)
+        upload(path)                       # upload the shard BEFORE state, so state never points at a missing file
+        state["shard_idx"] += 1
+        state["train_tokens"] += len(chunk)
+        commit_state()
+        mix = {n: f"{emitted[n] / max(1, sum(emitted.values())):.0%}" for n in SOURCES}
+        print(f"wrote {path} ({len(chunk) / 1e6:.0f}M tokens, {time.time() - t0:.0f}s) | "
+              f"total {state['train_tokens'] / 1e9:.2f}B / {target / 1e9:.2f}B | mix {mix}")
+
+    print("Done.")
+
 
 if __name__ == "__main__":
     main()

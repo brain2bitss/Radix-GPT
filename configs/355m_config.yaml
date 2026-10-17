@@ -1,26 +1,45 @@
-# Architecture Hyperparameters (Calculates to ~355M parameters)
-vocab_size: 50257        
-hidden_size: 1024        # Restored to 1024
-num_hidden_layers: 24    # Restored to 24
-num_attention_heads: 16  
-intermediate_size: 2816  
-max_position_embeddings: 512  # Reduced from 1024 to fit VRAM
-initializer_range: 0.02  
-rms_norm_eps: 0.00001    
+# ~355M params (with tied embeddings). All "steps" below are OPTIMIZER steps.
 
-# Training Hyperparameters
-batch_size: 1                 # Reduced to 1 to fit VRAM
-gradient_accumulation_steps: 16 
-learning_rate: 0.0003    
-weight_decay: 0.1        
+# Architecture
+vocab_size: 50304            # GPT-2 vocab (50257) padded to a multiple of 64
+hidden_size: 1024
+num_hidden_layers: 24
+num_attention_heads: 16
+intermediate_size: 2816
+max_position_embeddings: 512
+initializer_range: 0.02
+rms_norm_eps: 0.00001
+tie_word_embeddings: true
+
+# Optimization
+batch_size: 4                      # micro-batch; raise if benchmark.py shows VRAM headroom
+gradient_accumulation_steps: 32    # 4 x 32 = 128 seqs x 512 = 65,536 tokens per optimizer step
+learning_rate: 0.0003
+min_lr: 0.00003
+warmup_steps: 1000
+max_steps: 23000                   # ~1.5B tokens. SET FROM YOUR BENCHMARKED tok/s, do not change mid-run
+weight_decay: 0.1
 adam_beta1: 0.9
 adam_beta2: 0.95
-adam_epsilon: 0.00000001 
-max_grad_norm: 1.0       
-epochs: 2                
-logging_steps: 10
-checkpoint_steps: 500
+adam_epsilon: 0.00000001
+max_grad_norm: 1.0
+dtype: "float16"                   # T4 has no bf16
+gradient_checkpointing: true
+seed: 1337
 
-# File Paths
-data_path: "data/tokenized/train.bin"
+# Logging / eval / checkpoints
+logging_steps: 5
+eval_steps: 250
+eval_batches: 100
+checkpoint_minutes: 30
+keep_checkpoints: 2
+time_limit_hours: 11.5             # save + exit cleanly before Kaggle's 12h cutoff
+
+# Paths
+data_dir: "data/shards"
+val_path: "data/val.bin"
 output_dir: "checkpoints"
+
+# Optional Hugging Face Hub persistence (leave "" to disable)
+hf_repo: ""                        # e.g. "yourname/my-355m-run"  (private model repo, checkpoints)
+hf_data_repo: ""                   # e.g. "yourname/my-tokens"    (private dataset repo, shards)
