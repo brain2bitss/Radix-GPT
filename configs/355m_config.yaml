@@ -1,16 +1,16 @@
-# Architecture Hyperparameters (Calculates to ~298M parameters)
+# Architecture Hyperparameters (Calculates to ~240M parameters)
 vocab_size: 50257        
-hidden_size: 896         # Narrower than 1024 to save VRAM
-num_hidden_layers: 20    # Deeper logic
-num_attention_heads: 14  # 896 / 14 = 64 head_dim
-intermediate_size: 2432  # SwiGLU standard
-max_position_embeddings: 1024 
+hidden_size: 896         
+num_hidden_layers: 20    
+num_attention_heads: 14  
+intermediate_size: 2432  
+max_position_embeddings: 512  # CHANGED from 1024 to 512 for speed
 initializer_range: 0.02  
 rms_norm_eps: 0.00001    
 
 # Training Hyperparameters
-batch_size: 2            
-gradient_accumulation_steps: 16 
+batch_size: 4                 # CHANGED from 2 to 4
+gradient_accumulation_steps: 4 # CHANGED from 16 to 4
 learning_rate: 0.0003    
 weight_decay: 0.1        
 adam_beta1: 0.9
