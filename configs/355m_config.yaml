@@ -4,13 +4,13 @@ hidden_size: 1024        # Hidden dimension size
 num_hidden_layers: 24    # Total transformer blocks
 num_attention_heads: 16  # Multi-head attention count
 intermediate_size: 2816  # SwiGLU hidden dimension (~8/3 * hidden_size)
-max_position_embeddings: 2048 # Context window length
+max_position_embeddings: 1024 # Reduced from 2048 to save VRAM
 initializer_range: 0.02  # Weights initialization standard deviation
 rms_norm_eps: 0.00001    # Stability epsilon for RMSNorm
 
 # Training Hyperparameters
-batch_size: 8            # Increased micro-batch to utilize T4 better
-gradient_accumulation_steps: 4 # Adjusted to keep effective batch at 32
+batch_size: 2            # Reduced from 8 to fit in 16GB VRAM
+gradient_accumulation_steps: 16 # Increased to keep effective batch size at 32
 learning_rate: 0.0003    # Peak learning rate
 weight_decay: 0.1        # AdamW regularization
 adam_beta1: 0.9
