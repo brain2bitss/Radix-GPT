@@ -1,16 +1,16 @@
-# Architecture Hyperparameters (Calculates to ~240M parameters)
+# Architecture Hyperparameters (Calculates to ~355M parameters)
 vocab_size: 50257        
-hidden_size: 896         
-num_hidden_layers: 20    
-num_attention_heads: 14  
-intermediate_size: 2432  
-max_position_embeddings: 512  # CHANGED from 1024 to 512 for speed
+hidden_size: 1024        # Restored to 1024
+num_hidden_layers: 24    # Restored to 24
+num_attention_heads: 16  
+intermediate_size: 2816  
+max_position_embeddings: 512  # Reduced from 1024 to fit VRAM
 initializer_range: 0.02  
 rms_norm_eps: 0.00001    
 
 # Training Hyperparameters
-batch_size: 4                 # CHANGED from 2 to 4
-gradient_accumulation_steps: 4 # CHANGED from 16 to 4
+batch_size: 1                 # Reduced to 1 to fit VRAM
+gradient_accumulation_steps: 16 
 learning_rate: 0.0003    
 weight_decay: 0.1        
 adam_beta1: 0.9
