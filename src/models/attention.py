@@ -17,8 +17,8 @@ class RotaryEmbedding(nn.Module):
         return emb.cos(), emb.sin()
 
 def apply_rope(q, k, cos, sin):
-    cos = cos[None, None, :, :]
-    sin = sin[None, None, :, :]
+    cos = cos[None, None, :, :].to(dtype=q.dtype)
+    sin = sin[None, None, :, :].to(dtype=q.dtype)
     
     def rotate_half(x):
         x1, x2 = x.chunk(2, dim=-1)

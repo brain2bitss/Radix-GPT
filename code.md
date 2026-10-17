@@ -6,26 +6,26 @@
 ## configs/355m_config.yaml
 
 ```yaml
-# Architecture Hyperparameters (Calculates to ~355M parameters)
-vocab_size: 50257        # Standard GPT-2 vocabulary size
-hidden_size: 1024        # Hidden dimension size
-num_hidden_layers: 24    # Total transformer blocks
-num_attention_heads: 16  # Multi-head attention count
-intermediate_size: 2816  # SwiGLU hidden dimension (~8/3 * hidden_size)
-max_position_embeddings: 2048 # Context window length
-initializer_range: 0.02  # Weights initialization standard deviation
-rms_norm_eps: 1e-5       # Stability epsilon for RMSNorm
+# Architecture Hyperparameters (Calculates to ~240M parameters)
+vocab_size: 50257        
+hidden_size: 896         
+num_hidden_layers: 20    
+num_attention_heads: 14  
+intermediate_size: 2432  
+max_position_embeddings: 512  # CHANGED from 1024 to 512 for speed
+initializer_range: 0.02  
+rms_norm_eps: 0.00001    
 
 # Training Hyperparameters
-batch_size: 4            # Micro-batch size per GPU
-gradient_accumulation_steps: 8 # Simulates larger batch sizes
-learning_rate: 3e-4      # Peak learning rate
-weight_decay: 0.1        # AdamW regularization
+batch_size: 4                 # CHANGED from 2 to 4
+gradient_accumulation_steps: 4 # CHANGED from 16 to 4
+learning_rate: 0.0003    
+weight_decay: 0.1        
 adam_beta1: 0.9
 adam_beta2: 0.95
-adam_epsilon: 1e-8
-max_grad_norm: 1.0       # Gradient clipping threshold
-epochs: 3
+adam_epsilon: 0.00000001 
+max_grad_norm: 1.0       
+epochs: 2                
 logging_steps: 10
 checkpoint_steps: 500
 
@@ -44,39 +44,51 @@ from src.models.modeling import CustomLLM
 from src.tokenizer import LLMTokenizer
 
 class LLMInferenceEngine:
-    def __init__(self, config_yaml: str, weights_path: str = None):
+    def __init__(self, config_yaml: str, weights_path: str):
         self.config = LLMConfig.from_yaml(config_yaml)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = LLMTokenizer()
         
         self.model = CustomLLM(self.config)
-        if weights_path:
-            self.model.load_state_dict(torch.load(weights_path, map_location=self.device))
+        self.model.load_state_dict(torch.load(weights_path, map_location=self.device))
         self.model.to(self.device)
         self.model.eval()
 
-    def generate(self, prompt: str, max_new_tokens: int = 50, temperature: float = 0.7) -> str:
-        input_ids = torch.tensor([self.tokenizer.encode(prompt)], dtype=torch.long, device=self.device)
+    def generate(self, prompt: str, max_new_tokens: int = 300, temperature: float = 0.7) -> str:
+        # 1. We MUST use the exact format we trained on
+        system_prompt = "You are a helpful AI assistant. When asked to list things, use bullet points. When asked for code, use markdown code blocks. Use paragraphs for explanations."
+        formatted_prompt = f"<|System|>\n{system_prompt}\n<|User|>\n{prompt}\n<|Assistant|>\n"
+        
+        input_ids = torch.tensor([self.tokenizer.encode(formatted_prompt)], dtype=torch.long, device=self.device)
         
         with torch.no_grad():
             for _ in range(max_new_tokens):
-                # Slice input if context length overflows model capabilities
                 input_cond = input_ids[:, -self.config.max_position_embeddings:]
                 logits, _ = self.model(input_cond)
                 
+                # Apply temperature and top-k sampling for better quality
                 logits = logits[:, -1, :] / temperature
-                probs = F.softmax(logits, dim=-1)
+                v, _ = torch.topk(logits, min(40, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
                 
+                probs = F.softmax(logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
                 input_ids = torch.cat((input_ids, next_token), dim=1)
                 
-        return self.tokenizer.decode(input_ids[0].tolist())
+                # Stop if we hit the end of text token
+                if next_token.item() == self.tokenizer.tokenizer.eos_token_id:
+                    break
+                
+        # Decode and extract only the assistant's reply
+        full_text = self.tokenizer.decode(input_ids[0].tolist())
+        reply = full_text.split("<|Assistant|>\n")[-1].split("<|endoftext|>")[0]
+        return reply.strip()
 
 if __name__ == "__main__":
-    # Self-test invocation using local randomly initialized weights
-    engine = LLMInferenceEngine("configs/355m_config.yaml")
-    output = engine.generate("Artificial Intelligence is", max_new_tokens=20)
-    print(f"\nGenerated Output:\n{output}")
+    engine = LLMInferenceEngine("configs/355m_config.yaml", "checkpoints/step_1000.pt")
+    output = engine.generate("What is Python? List 3 bullet points why it is popular.", max_new_tokens=200)
+    print(f"\n--- Model Output ---\n{output}")
+    
 ```
 
 ## requirements.txt
@@ -97,28 +109,28 @@ transformers>=4.38.0
 
 ```python
 import yaml
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass
 class LLMConfig:
     vocab_size: int = 50257
-    hidden_size: int = 1024
-    num_hidden_layers: int = 24
-    num_attention_heads: int = 16
-    intermediate_size: int = 2816
-    max_position_embeddings: int = 2048
+    hidden_size: int = 896          # Updated
+    num_hidden_layers: int = 20     # Updated
+    num_attention_heads: int = 14   # Updated
+    intermediate_size: int = 2432   # Updated
+    max_position_embeddings: int = 1024
     initializer_range: float = 0.02
     rms_norm_eps: float = 1e-5
     
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 8
+    batch_size: int = 2             # Updated
+    gradient_accumulation_steps: int = 16
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
     adam_epsilon: float = 1e-8
     max_grad_norm: float = 1.0
-    epochs: int = 3
+    epochs: int = 2
     logging_steps: int = 10
     checkpoint_steps: int = 500
     
@@ -184,8 +196,8 @@ class RotaryEmbedding(nn.Module):
         return emb.cos(), emb.sin()
 
 def apply_rope(q, k, cos, sin):
-    cos = cos[None, None, :, :]
-    sin = sin[None, None, :, :]
+    cos = cos[None, None, :, :].to(dtype=q.dtype)
+    sin = sin[None, None, :, :].to(dtype=q.dtype)
     
     def rotate_half(x):
         x1, x2 = x.chunk(2, dim=-1)
@@ -258,6 +270,7 @@ class SwiGLU(nn.Module):
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from .layers import RMSNorm, SwiGLU
 from .attention import CausalFlashAttention
 
@@ -278,6 +291,7 @@ class CustomLLM(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.gradient_checkpointing = False # ADDED
         
         self.token_embeddings = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_hidden_layers)])
@@ -285,9 +299,11 @@ class CustomLLM(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         self.token_embeddings.weight = self.lm_head.weight
-        
         self.apply(self._init_weights)
         print(f"Model Parameter Count: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}")
+
+    def gradient_checkpointing_enable(self):
+        self.gradient_checkpointing = True
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -299,8 +315,14 @@ class CustomLLM(nn.Module):
 
     def forward(self, input_ids, targets=None):
         x = self.token_embeddings(input_ids)
+        
         for layer in self.layers:
-            x = layer(x)
+            if self.gradient_checkpointing and self.training:
+                # THIS SAVES THE VRAM
+                x = checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
+                
         x = self.norm(x)
         logits = self.lm_head(x)
 
@@ -318,29 +340,120 @@ import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-def prepare_dataset(output_path="data/tokenized/train.bin", max_samples=50000):
-    print("Downloading OpenAssistant dataset...")
-    dataset = load_dataset("OpenAssistant/oasst1", split="train")
+def clean_and_format_data(tokenizer, max_tokens=50_000_000):
+    print("Initializing Multi-Dataset Blending Pipeline...")
+    
+    # Target allocations: 30% General, 50% Chat (Formatted), 20% Code (Formatted)
+    wiki_target = int(max_tokens * 0.30)
+    oasst_target = int(max_tokens * 0.50)
+    code_target = int(max_tokens * 0.20)
+    
+    global_token_stream = []
+
+    # =========================================================================
+    # DATASET 1: Wikipedia (General Knowledge)
+    # =========================================================================
+    print(f"\nProcessing Wikipedia Stream (Target: {wiki_target:,} tokens)...")
+    try:
+        wiki_ds = load_dataset("wikipedia", "20220301.en", split="train", streaming=True)
+        wiki_tokens = 0
+        for row in wiki_ds:
+            # Prompting format to teach it how to summarize text
+            formatted_text = f"<|System|>\nYou are a helpful assistant.\n<|User|>\nSummarize the following text:\n{row['text'][:1500]}\n<|Assistant|>\nHere is a summary:\n{row['text'][:400]}\n<|endoftext|>\n"
+            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
+            global_token_stream.extend(tokens)
+            wiki_tokens += len(tokens)
+            if wiki_tokens >= wiki_target:
+                break
+        print(f"-> Successfully extracted {wiki_tokens:,} Wikipedia tokens.")
+    except Exception as e:
+        print(f"Skipping Wikipedia: {e}")
+
+    # =========================================================================
+    # DATASET 2: OpenAssistant (Formatting & Conversation)
+    # =========================================================================
+    print(f"\nProcessing OpenAssistant Stream (Target: {oasst_target:,} tokens)...")
+    try:
+        oasst_ds = load_dataset("OpenAssistant/oasst1", split="train")
+        en_oasst = oasst_ds.filter(lambda x: x["lang"] == "en")
+        
+        # We need to group by conversation ID to ensure the assistant replies to the right user
+        message_tree = {}
+        for row in en_oasst:
+            message_tree.setdefault(row['message_id'], row)
+            
+        oasst_tokens = 0
+        for row in en_oasst:
+            role = "User" if row['role'] == 'prompter' else "Assistant"
+            
+            # Add a system prompt to teach formatting
+            if role == "User":
+                # Every time we see a user prompt, we start a new conversation block
+                system_prompt = "<|System|>\nYou are a helpful AI assistant. When asked to list things, use bullet points. When asked for code, use markdown code blocks. Use paragraphs for explanations.\n"
+                formatted_text = f"{system_prompt}<|User|>\n{row['text']}\n"
+            else:
+                formatted_text = f"<|Assistant|>\n{row['text']}\n<|endoftext|>\n"
+                
+            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
+            global_token_stream.extend(tokens)
+            oasst_tokens += len(tokens)
+            
+            if oasst_tokens >= oasst_target:
+                break
+        print(f"-> Successfully extracted {oasst_tokens:,} OpenAssistant tokens.")
+    except Exception as e:
+        print(f"Skipping OpenAssistant: {e}")
+
+    # =========================================================================
+    # DATASET 3: Code Feedback (Coding & Syntax)
+    # =========================================================================
+    print(f"\nProcessing Code Feedback Stream (Target: {code_target:,} tokens)...")
+    try:
+        code_ds = load_dataset("m-a-p/CodeFeedback-Filtered-Instruction", split="train", streaming=True)
+        code_tokens = 0
+        for row in code_ds:
+            # Format code specifically with markdown blocks
+            formatted_text = f"<|System|>\nYou are a helpful AI assistant. Provide code in ```python blocks.\n<|User|>\n{row['query']}\n<|Assistant|>\n```python\n{row['answer']}\n```\n<|endoftext|>\n"
+            tokens = tokenizer.encode(formatted_text, add_special_tokens=False)
+            global_token_stream.extend(tokens)
+            code_tokens += len(tokens)
+            if code_tokens >= code_target:
+                break
+        print(f"-> Successfully extracted {code_tokens:,} Coding tokens.")
+    except Exception as e:
+        print(f"Skipping Code Feedback: {e}")
+
+    return global_token_stream
+
+def main():
+    output_path = "data/tokenized/train.bin"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     
-    filtered = dataset.filter(lambda x: x["lang"] == "en")
-    subset = filtered.shuffle(seed=42).select(range(min(max_samples, len(filtered))))
+    # We are generating 50 MILLION tokens. This will take ~15-20 minutes.
+    token_stream = clean_and_format_data(tokenizer, max_tokens=50_000_000)
     
-    text_data = []
-    for row in subset:
-        role = "User" if row['role'] == 'prompter' else "Assistant"
-        text_data.append(f"<|{role}|>\n{row['text']}\n<|endoftext|>\n")
-        
-    full_text = "".join(text_data)
-    tokens = tokenizer.encode(full_text)
-    arr = np.array(tokens, dtype=np.uint16)
+    print(f"\nTotal Compiled Global Token Count: {len(token_stream):,}")
     
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    arr.tofile(output_path)
-    print(f"Successfully created {output_path} with {len(tokens):,} tokens.")
+    # Shuffling
+    print("Performing global macro-shuffling across data segments...")
+    block_size = 2048
+    num_blocks = len(token_stream) // block_size
+    
+    if num_blocks > 0:
+        blocks = [token_stream[i*block_size : (i+1)*block_size] for i in range(num_blocks)]
+        np.random.seed(42)
+        np.random.shuffle(blocks)
+        token_stream = [token for block in blocks for token in block]
+
+    print(f"Serializing unified binary array matrix directly to: {output_path}")
+    np_array = np.array(token_stream, dtype=np.uint16)
+    np_array.tofile(output_path)
+    print("Data compilation successfully completed. Ready for train.py execution loop!")
 
 if __name__ == "__main__":
-    prepare_dataset()
+    main()
 ```
 
 ## src/tokenizer.py
@@ -382,6 +495,11 @@ class LLMTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         
+        # ACTIVATE GRADIENT CHECKPOINTING HERE
+        if hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable()
+            print("Gradient Checkpointing ENABLED.")
+        
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=config.learning_rate,
@@ -393,19 +511,30 @@ class LLMTrainer:
         self.dataloader = DataLoader(
             self.dataset, 
             batch_size=config.batch_size, 
-            shuffle=True, 
-            pin_memory=True if torch.cuda.is_available() else False,
-            num_workers=2 if torch.cuda.is_available() else 0
+            shuffle=True
         )
 
     def train(self):
         self.model.train()
         os.makedirs(self.config.output_dir, exist_ok=True)
         step = 0
+        global_step = 0
+        accumulated_loss = 0.0
         
-        # Fixed the typo here
-        autocast_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-        print(f"Starting training loop execution using precision: {autocast_dtype}")
+        # Proper precision selection: float16 for Tesla T4, bfloat16 for Ampere+ (A100/H100) or CPU
+        if torch.cuda.is_available():
+            autocast_device = "cuda"
+            if torch.cuda.get_device_capability()[0] >= 8:
+                autocast_dtype = torch.bfloat16
+            else:
+                autocast_dtype = torch.float16
+        else:
+            autocast_device = "cpu"
+            autocast_dtype = torch.bfloat16
+            
+        use_scaler = (self.device.type == "cuda" and autocast_dtype == torch.float16)
+        scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+        print(f"Starting training loop execution using precision: {autocast_dtype} (GradScaler: {use_scaler})", flush=True)
         
         for epoch in range(self.config.epochs):
             self.optimizer.zero_grad(set_to_none=True)
@@ -414,25 +543,39 @@ class LLMTrainer:
                 x = x.to(self.device, non_blocking=True)
                 y = y.to(self.device, non_blocking=True)
                 
-                with torch.amp.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=autocast_dtype):
+                if step == 0:
+                    print(f"Batch loaded. x shape: {x.shape}. Running forward pass...", flush=True)
+                
+                with torch.amp.autocast(device_type=autocast_device, dtype=autocast_dtype):
                     logits, loss = self.model(x, y)
                     loss = loss / self.config.gradient_accumulation_steps
                 
-                loss.backward()
+                if step == 0:
+                    print("Forward pass done! Running backward pass...", flush=True)
+                    
+                scaler.scale(loss).backward()
+                accumulated_loss += loss.item() * self.config.gradient_accumulation_steps
                 
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
+                    scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
-                    self.optimizer.step()
+                    scaler.step(self.optimizer)
+                    scaler.update()
                     self.optimizer.zero_grad(set_to_none=True)
                     
-                    if step % self.config.logging_steps == 0:
-                        actual_loss = loss.item() * self.config.gradient_accumulation_steps
-                        print(f"Epoch {epoch} | Step {step} | Loss: {actual_loss:.4f}")
+                    global_step += 1
+                    
+                    # Log on first step, then every logging_steps optimizer updates
+                    if global_step == 1 or global_step % self.config.logging_steps == 0:
+                        avg_loss = accumulated_loss / self.config.gradient_accumulation_steps
+                        print(f"Epoch {epoch} | Step {global_step} (Batch {step + 1}) | Loss: {avg_loss:.4f}", flush=True)
                         
-                if step % self.config.checkpoint_steps == 0 and step > 0:
-                    checkpoint_path = os.path.join(self.config.output_dir, f"step_{step}.pt")
-                    torch.save(self.model.state_dict(), checkpoint_path)
-                    print(f"Saved sharded architectural weights to: {checkpoint_path}")
+                    accumulated_loss = 0.0
+                        
+                    if self.config.checkpoint_steps > 0 and global_step % self.config.checkpoint_steps == 0:
+                        checkpoint_path = os.path.join(self.config.output_dir, f"step_{global_step}.pt")
+                        torch.save(self.model.state_dict(), checkpoint_path)
+                        print(f"Saved sharded architectural weights to: {checkpoint_path}", flush=True)
                     
                 step += 1
 ```
