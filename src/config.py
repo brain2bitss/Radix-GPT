@@ -31,4 +31,27 @@ class LLMConfig:
     def from_yaml(cls, yaml_path: str) -> "LLMConfig":
         with open(yaml_path, "r") as f:
             config_dict = yaml.safe_load(f)
+            
+        # Enterprise-grade type enforcement
+        # This guarantees that optimizer variables are always floats
+        float_keys = [
+            "initializer_range", "rms_norm_eps", "learning_rate", 
+            "weight_decay", "adam_beta1", "adam_beta2", 
+            "adam_epsilon", "max_grad_norm"
+        ]
+        int_keys = [
+            "vocab_size", "hidden_size", "num_hidden_layers", 
+            "num_attention_heads", "intermediate_size", "max_position_embeddings", 
+            "batch_size", "gradient_accumulation_steps", "epochs", 
+            "logging_steps", "checkpoint_steps"
+        ]
+
+        for key in float_keys:
+            if key in config_dict:
+                config_dict[key] = float(config_dict[key])
+                
+        for key in int_keys:
+            if key in config_dict:
+                config_dict[key] = int(config_dict[key])
+
         return cls(**config_dict)

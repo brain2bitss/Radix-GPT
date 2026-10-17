@@ -6,16 +6,16 @@ num_attention_heads: 16  # Multi-head attention count
 intermediate_size: 2816  # SwiGLU hidden dimension (~8/3 * hidden_size)
 max_position_embeddings: 2048 # Context window length
 initializer_range: 0.02  # Weights initialization standard deviation
-rms_norm_eps: 1e-5       # Stability epsilon for RMSNorm
+rms_norm_eps: 0.00001    # Stability epsilon for RMSNorm
 
 # Training Hyperparameters
 batch_size: 8            # Increased micro-batch to utilize T4 better
 gradient_accumulation_steps: 4 # Adjusted to keep effective batch at 32
-learning_rate: 3e-4      # Peak learning rate
+learning_rate: 0.0003    # Peak learning rate
 weight_decay: 0.1        # AdamW regularization
 adam_beta1: 0.9
 adam_beta2: 0.95
-adam_epsilon: 1e-8
+adam_epsilon: 0.00000001 # 1e-8
 max_grad_norm: 1.0       # Gradient clipping threshold
 epochs: 2                # Reduced to 2 to prevent memorization
 logging_steps: 10
