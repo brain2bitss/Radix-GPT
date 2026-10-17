@@ -1,4 +1,5 @@
 import os
+import glob
 import torch
 from torch.utils.data import DataLoader
 
@@ -72,8 +73,16 @@ class LLMTrainer:
                         print(f"Epoch {epoch} | Step {global_step} | Loss: {actual_loss:.4f}", flush=True)
                         
                 if step % self.config.checkpoint_steps == 0 and step > 0:
+                    # DELETE OLD CHECKPOINTS TO SAVE DISK SPACE
+                    old_checkpoints = glob.glob(os.path.join(self.config.output_dir, "step_*.pt"))
+                    for old_ckpt in old_checkpoints:
+                        try:
+                            os.remove(old_ckpt)
+                        except Exception:
+                            pass
+                            
                     checkpoint_path = os.path.join(self.config.output_dir, f"step_{step}.pt")
                     torch.save(self.model.state_dict(), checkpoint_path)
-                    print(f"Saved sharded architectural weights to: {checkpoint_path}", flush=True)
+                    print(f"Saved checkpoint to: {checkpoint_path}", flush=True)
                     
                 step += 1
