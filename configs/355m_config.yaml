@@ -1,23 +1,23 @@
-# Architecture Hyperparameters (Calculates to ~355M parameters)
-vocab_size: 50257        # Standard GPT-2 vocabulary size
-hidden_size: 1024        # Hidden dimension size
-num_hidden_layers: 24    # Total transformer blocks
-num_attention_heads: 16  # Multi-head attention count
-intermediate_size: 2816  # SwiGLU hidden dimension (~8/3 * hidden_size)
-max_position_embeddings: 1024 # Reduced from 2048 to save VRAM
-initializer_range: 0.02  # Weights initialization standard deviation
-rms_norm_eps: 0.00001    # Stability epsilon for RMSNorm
+# Architecture Hyperparameters (Calculates to ~298M parameters)
+vocab_size: 50257        
+hidden_size: 896         # Narrower than 1024 to save VRAM
+num_hidden_layers: 20    # Deeper logic
+num_attention_heads: 14  # 896 / 14 = 64 head_dim
+intermediate_size: 2432  # SwiGLU standard
+max_position_embeddings: 1024 
+initializer_range: 0.02  
+rms_norm_eps: 0.00001    
 
 # Training Hyperparameters
-batch_size: 2            # Reduced from 8 to fit in 16GB VRAM
-gradient_accumulation_steps: 16 # Increased to keep effective batch size at 32
-learning_rate: 0.0003    # Peak learning rate
-weight_decay: 0.1        # AdamW regularization
+batch_size: 2            
+gradient_accumulation_steps: 16 
+learning_rate: 0.0003    
+weight_decay: 0.1        
 adam_beta1: 0.9
 adam_beta2: 0.95
-adam_epsilon: 0.00000001 # 1e-8
-max_grad_norm: 1.0       # Gradient clipping threshold
-epochs: 2                # Reduced to 2 to prevent memorization
+adam_epsilon: 0.00000001 
+max_grad_norm: 1.0       
+epochs: 2                
 logging_steps: 10
 checkpoint_steps: 500
 

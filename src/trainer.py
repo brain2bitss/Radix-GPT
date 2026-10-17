@@ -10,6 +10,11 @@ class LLMTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         
+        # ACTIVATE GRADIENT CHECKPOINTING HERE
+        if hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable()
+            print("Gradient Checkpointing ENABLED.")
+        
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=config.learning_rate,
@@ -18,7 +23,6 @@ class LLMTrainer:
             weight_decay=config.weight_decay
         )
         
-        # We removed pin_memory and num_workers to prevent silent hangs in Kaggle
         self.dataloader = DataLoader(
             self.dataset, 
             batch_size=config.batch_size, 
@@ -41,7 +45,7 @@ class LLMTrainer:
                 y = y.to(self.device, non_blocking=True)
                 
                 if step == 0:
-                    print(f"Batch loaded. x shape: {x.shape}. Running forward pass (this might take 10-20 seconds)...")
+                    print(f"Batch loaded. x shape: {x.shape}. Running forward pass...")
                 
                 with torch.amp.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=autocast_dtype):
                     logits, loss = self.model(x, y)

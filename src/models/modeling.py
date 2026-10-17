@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from .layers import RMSNorm, SwiGLU
 from .attention import CausalFlashAttention
 
@@ -21,6 +22,7 @@ class CustomLLM(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.gradient_checkpointing = False # ADDED
         
         self.token_embeddings = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_hidden_layers)])
@@ -28,9 +30,11 @@ class CustomLLM(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         self.token_embeddings.weight = self.lm_head.weight
-        
         self.apply(self._init_weights)
         print(f"Model Parameter Count: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}")
+
+    def gradient_checkpointing_enable(self):
+        self.gradient_checkpointing = True
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -42,8 +46,14 @@ class CustomLLM(nn.Module):
 
     def forward(self, input_ids, targets=None):
         x = self.token_embeddings(input_ids)
+        
         for layer in self.layers:
-            x = layer(x)
+            if self.gradient_checkpointing and self.training:
+                # THIS SAVES THE VRAM
+                x = checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
+                
         x = self.norm(x)
         logits = self.lm_head(x)
 
