@@ -23,7 +23,10 @@ adam_epsilon: 0.00000001
 max_grad_norm: 1.0       
 logging_steps: 10
 eval_steps: 1000
+eval_batches: 20                  # How many batches to use for validation
 checkpoint_minutes: 30            # Save every 30 mins
+keep_checkpoints: 2               # Only keep the 2 most recent local files to save disk
+time_limit_hours: 11.5            # Kaggle safety kill switch
 
 # File Paths
 data_dir: "data/shards"
@@ -31,3 +34,6 @@ val_path: "data/val.bin"
 output_dir: "checkpoints"
 dtype: "float16"
 gradient_checkpointing: false     # Turned OFF for 125M (faster!)
+
+# Hugging Face Upload (CRITICAL)
+hf_repo: "brain2bits/radix-model" # <--- ADDED THIS! It will upload here.
