@@ -95,51 +95,39 @@ if __name__ == "__main__":
 ## configs/125m_config.yaml
 
 `yaml
-# ~125M params (with tied embeddings). All "steps" below are OPTIMIZER steps.
-
-# Architecture
-vocab_size: 50304
-hidden_size: 768
-num_hidden_layers: 12
-num_attention_heads: 12
-intermediate_size: 2048
-max_position_embeddings: 512
-initializer_range: 0.02
-rms_norm_eps: 0.00001
+# Architecture Hyperparameters (Calculates to ~124M parameters)
+vocab_size: 50257        
+hidden_size: 768         
+num_hidden_layers: 12    
+num_attention_heads: 12  
+intermediate_size: 2048  
+max_position_embeddings: 512  
+initializer_range: 0.02  
+rms_norm_eps: 0.00001    
 tie_word_embeddings: true
 
-# Optimization
-batch_size: 16
-gradient_accumulation_steps: 8     # 16 x 8 = 128 seqs x 512 = 65,536 tokens per optimizer step
+# Training Hyperparameters
+batch_size: 8
+gradient_accumulation_steps: 16   # 8 x 16 = 128 seqs = 65,536 tokens per step
 learning_rate: 0.0005
 min_lr: 0.00005
 warmup_steps: 1000
-max_steps: 61000                   # ~4B tokens. SET FROM YOUR BENCHMARKED tok/s, do not change mid-run
-weight_decay: 0.1
+max_steps: 45000                  # ~2.95B tokens = one pass over your 3B dataset
+weight_decay: 0.1        
 adam_beta1: 0.9
 adam_beta2: 0.95
-adam_epsilon: 0.00000001
-max_grad_norm: 1.0
-dtype: "float16"
-gradient_checkpointing: true       # try false if benchmark.py shows it fits (about 25% faster)
-seed: 1337
-
-# Logging / eval / checkpoints
+adam_epsilon: 0.00000001 
+max_grad_norm: 1.0       
 logging_steps: 10
-eval_steps: 500
-eval_batches: 100
-checkpoint_minutes: 30
-keep_checkpoints: 2
-time_limit_hours: 11.5
+eval_steps: 1000
+checkpoint_minutes: 30            # Save every 30 mins
 
-# Paths
+# File Paths
 data_dir: "data/shards"
 val_path: "data/val.bin"
 output_dir: "checkpoints"
-
-# Optional Hugging Face Hub persistence (leave "" to disable)
-hf_repo: ""
-hf_data_repo: ""
+dtype: "float16"
+gradient_checkpointing: false     # Turned OFF for 125M (faster!)
 
 `
 
